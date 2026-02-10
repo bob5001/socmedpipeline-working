@@ -70,7 +70,20 @@ Generate {num_posts} diverse posts now:"""
     elif "```" in content:
         content = content.split("```")[1].split("```")[0].strip()
 
-    posts = json.loads(content)
+    # Debug output
+    if not content or content[0] not in '[{':
+        print(f"\nRaw response from model:")
+        print(content[:500])
+        print("\n...parsing as best we can...")
+
+    try:
+        posts = json.loads(content)
+    except json.JSONDecodeError as e:
+        print(f"\n✗ Failed to parse JSON from model response")
+        print(f"  Error: {e}")
+        print(f"\nFirst 200 chars of content:")
+        print(content[:200])
+        raise
 
     # Create CSV rows
     rows = []

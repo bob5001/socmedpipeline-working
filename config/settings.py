@@ -22,7 +22,7 @@ REPLICATE_API_TOKEN = os.getenv("REPLICATE_API") or os.getenv("REPLICATE_API_TOK
 # Ollama settings
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_VISION_MODEL = "llava:7b"
-OLLAMA_TEXT_MODEL = "llama3.1"
+OLLAMA_TEXT_MODEL = "llama3.1:8b"
 
 # Stable Diffusion settings
 STABLE_DIFFUSION_MODEL = "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b"
