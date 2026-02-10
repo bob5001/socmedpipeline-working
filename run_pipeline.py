@@ -16,7 +16,7 @@ from src import (
     agent_3_vision_audit,
     agent_4_design_overlay,
     agent_5_queue_management,
-    agent_6_facebook_integration
+    agent_6_instagram_integration
 )
 
 def print_header(title):
@@ -52,7 +52,7 @@ def main():
         (agent_3_vision_audit, "Task 3: Vision Audit and Approval"),
         (agent_4_design_overlay, "Task 4: Text Overlay with Pillow"),
         (agent_5_queue_management, "Task 5: Queue Management and Status Tracking"),
-        (agent_6_facebook_integration, "Task 6: Facebook Business Manager Integration"),
+        (agent_6_instagram_integration, "Task 6: Instagram Graph API Integration"),
     ]
 
     for i, (agent_module, agent_name) in enumerate(agents, 1):
@@ -72,7 +72,7 @@ def main():
 
     print_header("PIPELINE COMPLETE")
     print("✓✓ All six tasks completed successfully")
-    print("   Draft posts ready for human review in Facebook Business Manager")
+    print("   Posts scheduled on Instagram (review at Meta Business Suite)")
     print()
 
 if __name__ == "__main__":
