@@ -50,7 +50,7 @@ def main():
         (agent_1_campaign_data, "Task 1: Campaign Data Generation"),
         (agent_2_image_generation, "Task 2: Image Generation via Replicate API"),
         (agent_3_vision_audit, "Task 3: Vision Audit and Approval"),
-        (agent_4_design_overlay, "Task 4: Affinity Designer Text Overlay"),
+        (agent_4_design_overlay, "Task 4: Text Overlay with Pillow"),
         (agent_5_queue_management, "Task 5: Queue Management and Status Tracking"),
         (agent_6_facebook_integration, "Task 6: Facebook Business Manager Integration"),
     ]

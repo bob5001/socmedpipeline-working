@@ -171,9 +171,8 @@ pipeline-status.json                 # Status report
 
 ## Notes
 
-- **Agent 4** (Affinity Designer) is a placeholder - it copies images for now
-- **Agent 6** (Facebook) is a placeholder - it logs what would be posted
-- Both can be implemented when MCP/API access is available
+- **Agent 4** (Text Overlay) uses Pillow to add caption/hashtags - fully functional!
+- **Agent 6** (Facebook) is a placeholder - it logs what would be posted (implement when FB API available)
 
 ## Next Steps
 
