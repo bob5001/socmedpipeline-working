@@ -39,8 +39,9 @@ CSV_COLUMNS = [
     "campaign_id",
     "content_pillar",
     "image_prompt",
-    "caption",
-    "hashtags",
+    "overlay_text",      # Short, bold text ON the image (3-8 words)
+    "caption",           # Post copy for Instagram text box
+    "hashtags",          # Tags for Instagram text box (not on image)
     "image_status",
     "vision_status",
     "design_status",

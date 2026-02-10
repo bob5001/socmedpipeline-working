@@ -79,72 +79,123 @@ def wrap_text(text, font, max_width, draw):
 
     return lines
 
-def apply_text_overlay(image_path, caption, hashtags, output_path):
+def get_text_color_for_brightness(img, x, y, font, text):
     """
-    Apply text overlay using Pillow.
+    Analyze image brightness at text location to choose black or white text.
+    """
+    try:
+        # Sample area where text will be
+        sample_width = 200
+        sample_height = 100
+        region = img.crop((
+            max(0, x),
+            max(0, y),
+            min(img.width, x + sample_width),
+            min(img.height, y + sample_height)
+        ))
 
-    Design approach:
-    - Clean, minimal aesthetic
-    - Text positioned in bottom third with padding
-    - Caption in larger font
-    - Hashtags in smaller, lighter font
-    - Semi-transparent dark overlay behind text for readability
+        # Calculate average brightness
+        region_gray = region.convert('L')
+        pixels = list(region_gray.getdata())
+        avg_brightness = sum(pixels) / len(pixels)
+
+        # Return black text for bright backgrounds, white for dark
+        return (0, 0, 0) if avg_brightness > 127 else (255, 255, 255)
+    except:
+        return (0, 0, 0)  # Default to black
+
+def apply_text_overlay(image_path, overlay_text, caption, output_path):
+    """
+    Apply large, bold text overlay for Instagram posts.
+
+    Design approach (based on example):
+    - Large, bold text directly on image (no background)
+    - Text positioned prominently (left-center)
+    - Very big font size for Instagram visibility
+    - Black or white text based on image brightness
+    - Caption and hashtags go in Instagram text box, NOT on image
     """
     try:
         # Open image
         img = Image.open(image_path)
         width, height = img.size
 
-        # Create drawing context
-        overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
+        # Convert to RGBA for drawing
+        img = img.convert('RGBA')
 
-        # Font sizes
-        caption_font = get_font(int(width * 0.025))  # ~2.5% of image width
-        hashtag_font = get_font(int(width * 0.018))  # ~1.8% of image width
+        # Create transparent overlay
+        txt_layer = Image.new('RGBA', img.size, (255, 255, 255, 0))
+        draw = ImageDraw.Draw(txt_layer)
 
-        # Text area dimensions
-        padding = int(width * 0.05)  # 5% padding
-        text_width = width - (padding * 2)
-        text_start_y = int(height * 0.65)  # Start at 65% down
+        # LARGE font size for Instagram - roughly 12-15% of image width
+        base_font_size = int(width * 0.13)
+        text_font = get_font(base_font_size)
 
-        # Add semi-transparent background for text area
-        overlay_height = height - text_start_y + padding
-        overlay_bg = Image.new('RGBA', (width, overlay_height), (0, 0, 0, 140))
-        overlay.paste(overlay_bg, (0, text_start_y - padding))
+        # Padding from edges
+        padding = int(width * 0.08)  # 8% padding
+        max_text_width = width - (padding * 2)
 
-        # Wrap and measure caption
-        caption_lines = wrap_text(caption, caption_font, text_width, draw)
+        # Wrap text to fit width
+        lines = wrap_text(overlay_text, text_font, max_text_width, draw)
 
-        # Draw caption
-        y_offset = text_start_y
-        for line in caption_lines:
-            draw.text(
-                (padding, y_offset),
-                line,
-                font=caption_font,
-                fill=(255, 255, 255, 255)
-            )
-            bbox = draw.textbbox((0, 0), line, font=caption_font)
-            line_height = bbox[3] - bbox[1]
-            y_offset += line_height + 5
+        # Calculate total text block height
+        line_heights = []
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=text_font)
+            line_heights.append(bbox[3] - bbox[1])
 
-        # Add spacing
-        y_offset += 15
+        total_text_height = sum(line_heights) + (len(lines) - 1) * int(base_font_size * 0.2)
 
-        # Draw hashtags
-        draw.text(
-            (padding, y_offset),
-            hashtags,
-            font=hashtag_font,
-            fill=(200, 200, 200, 255)
+        # Position text: left-center (like example)
+        x_start = padding
+        y_start = int(height * 0.3)  # Start at 30% down (upper-center area)
+
+        # Determine text color based on background brightness
+        text_color = get_text_color_for_brightness(img, x_start, y_start, text_font, overlay_text)
+
+        # Calculate text bounding box for background
+        # Add padding around text
+        box_padding = int(base_font_size * 0.3)
+
+        # Find max line width
+        max_line_width = 0
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=text_font)
+            line_width = bbox[2] - bbox[0]
+            max_line_width = max(max_line_width, line_width)
+
+        # Draw semi-transparent background box for contrast
+        # White box under black text, black box under white text
+        box_color = (255, 255, 255) if text_color == (0, 0, 0) else (0, 0, 0)
+        box_opacity = int(255 * 0.30)  # 30% opacity for better readability
+
+        box_x1 = x_start - box_padding
+        box_y1 = y_start - box_padding
+        box_x2 = x_start + max_line_width + box_padding
+        box_y2 = y_start + total_text_height + box_padding
+
+        draw.rectangle(
+            [box_x1, box_y1, box_x2, box_y2],
+            fill=box_color + (box_opacity,)
         )
 
-        # Composite overlay onto original image
-        img = img.convert('RGBA')
-        img = Image.alpha_composite(img, overlay)
+        # Draw each line
+        y_offset = y_start
+        for i, line in enumerate(lines):
+            # Main text
+            draw.text(
+                (x_start, y_offset),
+                line,
+                font=text_font,
+                fill=text_color + (255,)
+            )
 
-        # Convert back to RGB for saving as PNG/JPEG
+            y_offset += line_heights[i] + int(base_font_size * 0.2)
+
+        # Composite text layer onto image
+        img = Image.alpha_composite(img, txt_layer)
+
+        # Convert to RGB and save
         final = img.convert('RGB')
         final.save(output_path, 'PNG', quality=95)
 
@@ -152,6 +203,8 @@ def apply_text_overlay(image_path, caption, hashtags, output_path):
 
     except Exception as e:
         print(f"  ✗ Error applying overlay: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def main():
@@ -189,10 +242,11 @@ def main():
                 continue
 
             print(f"\n{post['post_id']}")
+            print(f"  Overlay text: {post['overlay_text']}")
             success = apply_text_overlay(
                 image_path,
+                post['overlay_text'],
                 post['caption'],
-                post['hashtags'],
                 output_path
             )
 

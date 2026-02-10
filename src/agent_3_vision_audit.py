@@ -78,7 +78,8 @@ Examine this image and determine if it:
 1. Matches the prompt description
 2. Fits the campaign's calm, minimalist tone
 3. Avoids alarmist or dramatic elements
-4. Would work well for this wellness campaign
+4. Has good contrast for text overlay - CRITICAL: Text will be overlaid on this image with a 30% opacity background box. The image should not have extreme brightness variations in the text area (left-center). Avoid images with bright windows, strong backlighting, or very bright/white areas where text will go.
+5. Would work well for this wellness campaign
 
 Respond in this format:
 APPROVED or REJECTED
