@@ -5,6 +5,7 @@ Reads posts-queue.csv and generates images for pending posts using Stable Diffus
 
 import csv
 import sys
+import os
 from pathlib import Path
 import replicate
 import requests
@@ -18,6 +19,9 @@ from config.settings import (
     STATUS_PENDING, STATUS_GENERATED, STATUS_FAILED,
     REPLICATE_API_TOKEN
 )
+
+# Set Replicate API token
+os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
 def read_posts_csv():
     """Read posts from CSV."""

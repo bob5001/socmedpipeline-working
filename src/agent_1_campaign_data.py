@@ -18,8 +18,10 @@ from config.settings import (
 )
 
 def generate_post_id():
-    """Generate unique timestamped post ID."""
-    return f"SS-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    """Generate unique timestamped post ID with microseconds."""
+    import time
+    time.sleep(0.01)  # Small delay to ensure uniqueness
+    return f"SS-{datetime.now().strftime('%Y%m%d-%H%M%S%f')[:20]}"
 
 def generate_posts_from_brief(num_posts=5):
     """
