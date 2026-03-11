@@ -2,6 +2,9 @@
 Agent 3: Vision Audit and Approval
 Uses Ollama llava:7b to examine generated images and verify they match
 the campaign tone and image prompt.
+
+On rejection, regenerates the image via Agent 2 and re-audits, up to
+MAX_RETRIES attempts before marking the post as permanently rejected.
 """
 
 import csv
@@ -10,14 +13,18 @@ from pathlib import Path
 import ollama
 import base64
 
-# Add parent directory to path
+# Add parent and src directories to path
 sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent))
 
 from config.settings import (
     CSV_PATH, CSV_COLUMNS, IMAGES_DIR, CAMPAIGN_BRIEF_PATH,
     OLLAMA_VISION_MODEL,
     STATUS_GENERATED, STATUS_APPROVED, STATUS_REJECTED, STATUS_PENDING
 )
+from agent_2_image_generation import generate_image
+
+MAX_RETRIES = 3
 
 def read_posts_csv():
     """Read posts from CSV."""
@@ -128,32 +135,47 @@ def main():
         print("No images ready for audit. Nothing to do.")
         return
 
-    # Audit images
+    # Audit images with retry on rejection
     updated = False
     for post in posts:
         if (post['image_status'] == STATUS_GENERATED
             and post['vision_status'] == STATUS_PENDING):
 
             image_path = IMAGES_DIR / f"{post['post_id']}.png"
+            approved = False
+            reasoning = ""
 
-            if not image_path.exists():
-                print(f"✗ {post['post_id']}: Image file not found")
-                post['vision_status'] = STATUS_REJECTED
-                continue
+            for attempt in range(1, MAX_RETRIES + 1):
+                if not image_path.exists():
+                    print(f"✗ {post['post_id']}: Image file not found")
+                    break
 
-            print(f"\n{post['post_id']} ({post['content_pillar']})")
-            approved, reasoning = audit_image(
-                image_path,
-                post['image_prompt'],
-                post['content_pillar']
-            )
+                print(f"\n{post['post_id']} ({post['content_pillar']}) — attempt {attempt}/{MAX_RETRIES}")
+                approved, reasoning = audit_image(
+                    image_path,
+                    post['image_prompt'],
+                    post['content_pillar']
+                )
+
+                if approved:
+                    print(f"  ✓ APPROVED: {reasoning}")
+                    break
+
+                print(f"  ✗ REJECTED: {reasoning}")
+
+                if attempt < MAX_RETRIES:
+                    print(f"  Regenerating image for retry {attempt + 1}/{MAX_RETRIES}...")
+                    success = generate_image(post['image_prompt'], post['post_id'])
+                    if not success:
+                        print(f"  ✗ Regeneration failed — no further retries")
+                        break
+                else:
+                    print(f"  ✗ Exhausted {MAX_RETRIES} attempts — marking as rejected")
 
             if approved:
                 post['vision_status'] = STATUS_APPROVED
-                print(f"  ✓ APPROVED: {reasoning}")
             else:
                 post['vision_status'] = STATUS_REJECTED
-                print(f"  ✗ REJECTED: {reasoning}")
 
             updated = True
 

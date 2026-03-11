@@ -6,6 +6,7 @@ Reads posts-queue.csv and generates images for pending posts using Stable Diffus
 import csv
 import sys
 import os
+import time
 from pathlib import Path
 import replicate
 import requests
@@ -96,8 +97,13 @@ def main():
 
     # Generate images
     updated = False
+    first = True
     for post in posts:
         if post['image_status'] == STATUS_PENDING:
+            if not first:
+                print("  Waiting 15s to avoid rate limit...")
+                time.sleep(15)
+            first = False
             success = generate_image(post['image_prompt'], post['post_id'])
 
             if success:
