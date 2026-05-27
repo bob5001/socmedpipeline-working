@@ -9,12 +9,17 @@ load_dotenv()
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
-IMAGES_DIR = PROJECT_ROOT / "images"
-CSV_PATH = PROJECT_ROOT / "posts-queue.csv"
-STATUS_PATH = PROJECT_ROOT / "pipeline-status.json"
+
+# Per-campaign output directory. Set CAMPAIGN_DIR env var before importing to
+# isolate each brief's outputs. Falls back to project root for legacy runs.
+CAMPAIGN_DIR = Path(os.getenv("CAMPAIGN_DIR", str(PROJECT_ROOT)))
+IMAGES_DIR = CAMPAIGN_DIR / "images"
+CSV_PATH = CAMPAIGN_DIR / "posts-queue.csv"
+STATUS_PATH = CAMPAIGN_DIR / "pipeline-status.json"
 
 # Ensure directories exist
-IMAGES_DIR.mkdir(exist_ok=True)
+CAMPAIGN_DIR.mkdir(parents=True, exist_ok=True)
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 # API Keys
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API") or os.getenv("REPLICATE_API_TOKEN")
@@ -30,8 +35,11 @@ IMAGE_WIDTH = 1024
 IMAGE_HEIGHT = 1024
 
 # Campaign settings
-CAMPAIGN_ID = "signal-sanctuary-ehs-awareness"
-CAMPAIGN_BRIEF_PATH = PROJECT_ROOT / "Signal Sanctuary — EHS Awareness Campa.md"
+CAMPAIGN_ID = os.getenv("CAMPAIGN_ID", "signal-sanctuary-ehs-awareness")
+CAMPAIGN_BRIEF_PATH = Path(os.getenv("CAMPAIGN_BRIEF_PATH", str(PROJECT_ROOT / "Signal Sanctuary — EHS Awareness Campa.md")))
+
+# Directory where frontend-generated JSON briefs are saved
+BRIEFS_DIR = Path(os.getenv("BRIEFS_DIR", str(PROJECT_ROOT / "briefs")))
 
 # CSV column definitions
 CSV_COLUMNS = [
