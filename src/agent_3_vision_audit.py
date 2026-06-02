@@ -10,7 +10,6 @@ MAX_RETRIES attempts before marking the post as permanently rejected.
 import csv
 import sys
 from pathlib import Path
-import ollama
 import base64
 
 # Add parent and src directories to path
@@ -19,7 +18,7 @@ sys.path.append(str(Path(__file__).parent))
 
 from config.settings import (
     CSV_PATH, CSV_COLUMNS, IMAGES_DIR, CAMPAIGN_BRIEF_PATH,
-    OLLAMA_VISION_MODEL,
+    ANTHROPIC_API_KEY, CLAUDE_MODEL,
     STATUS_GENERATED, STATUS_APPROVED, STATUS_REJECTED, STATUS_PENDING
 )
 from agent_2_image_generation import generate_image
@@ -92,17 +91,29 @@ Respond in this format:
 APPROVED or REJECTED
 Reasoning: [1-2 sentences explaining your decision]"""
 
-        # Call Ollama vision model
-        response = ollama.chat(
-            model=OLLAMA_VISION_MODEL,
+        # Call Claude vision
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=512,
             messages=[{
                 "role": "user",
-                "content": prompt,
-                "images": [image_data]
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": image_data,
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
             }]
         )
 
-        result = response['message']['content']
+        result = response.content[0].text
 
         # Parse response
         approved = "APPROVED" in result.split('\n')[0].upper()

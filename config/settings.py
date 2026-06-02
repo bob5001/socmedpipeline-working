@@ -24,10 +24,9 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 # API Keys
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API") or os.getenv("REPLICATE_API_TOKEN")
 
-# Ollama settings
-OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_VISION_MODEL = "llava:7b"
-OLLAMA_TEXT_MODEL = "llama3.1:8b"
+# Anthropic / Claude settings
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
 # Stable Diffusion settings
 STABLE_DIFFUSION_MODEL = "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b"

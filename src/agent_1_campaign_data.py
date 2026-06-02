@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from config.settings import (
     CSV_PATH, CSV_COLUMNS, CAMPAIGN_ID, CAMPAIGN_BRIEF_PATH,
-    STATUS_PENDING, OLLAMA_TEXT_MODEL, OLLAMA_BASE_URL
+    STATUS_PENDING, ANTHROPIC_API_KEY, CLAUDE_MODEL
 )
 
 def generate_post_id():
@@ -68,7 +68,7 @@ def load_campaign_brief(brief_path=None):
 def generate_posts_from_brief(num_posts=5, focus="general", brief_path=None):
     """
     Generate posts based on the campaign brief.
-    Uses Ollama llama3.1 to create content aligned with campaign principles.
+    Uses Claude Haiku to create content aligned with campaign principles.
 
     Args:
         num_posts: Number of posts to generate
@@ -76,7 +76,8 @@ def generate_posts_from_brief(num_posts=5, focus="general", brief_path=None):
         brief_path: Optional path to a campaign brief file (.json or .md).
                     Defaults to CAMPAIGN_BRIEF_PATH from settings.
     """
-    import ollama
+    import anthropic
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     # Read the campaign brief (JSON or markdown)
     campaign_brief = load_campaign_brief(brief_path)
@@ -156,14 +157,15 @@ Generate {num_posts} diverse posts that feel genuinely written for this specific
 
 CRITICAL: Your entire response must be ONLY a valid JSON array. No introduction, no explanation, no markdown. Start with [ and end with ]. Each element must be a JSON object with exactly these keys: content_pillar, image_prompt, overlay_text, caption, hashtags."""
 
-    # Call Ollama
-    response = ollama.chat(
-        model=OLLAMA_TEXT_MODEL,
+    # Call Claude
+    response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4096,
         messages=[{"role": "user", "content": prompt}]
     )
 
     # Parse response
-    content = response['message']['content']
+    content = response.content[0].text
 
     # Extract JSON from response (may be wrapped in markdown or have intro text)
     if "```json" in content:
@@ -274,7 +276,7 @@ def main():
 
     # Generate posts
     print(f"Reading campaign brief from {brief_path}")
-    print(f"Generating posts using {OLLAMA_TEXT_MODEL}...")
+    print(f"Generating posts using {CLAUDE_MODEL}...")
 
     posts = generate_posts_from_brief(num_posts=args.num_posts, focus=args.focus, brief_path=brief_path)
 
