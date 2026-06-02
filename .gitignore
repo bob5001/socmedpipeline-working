@@ -15,6 +15,8 @@ venv/
 # Generated content
 images/
 pipeline-status.json
+campaigns/
+briefs/
 
 # OS
 .DS_Store

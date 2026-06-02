@@ -48,6 +48,15 @@ def main():
         "--num-posts", type=int, default=5,
         help="Number of posts to generate (default: 5).",
     )
+    parser.add_argument(
+        "--auto", action="store_true",
+        help="Run all agents without interactive prompts (used by the API server).",
+    )
+    parser.add_argument(
+        "--from-agent", type=int, default=1, dest="from_agent", metavar="N",
+        help="Start from agent N, skipping earlier agents (default: 1). "
+             "Pass 2 when the frontend has already generated posts.",
+    )
     args = parser.parse_args()
 
     # --- Resolve campaign output directory ---
@@ -86,19 +95,20 @@ def main():
 
     print("""
 ╔══════════════════════════════════════════════════════════╗
-║   Social Media Campaign Pipeline                        ║
-║   Multi-Agent Workflow for Content Generation           ║
+║   Social Media Campaign Pipeline                         ║
+║   Multi-Agent Workflow for Content Generation            ║
 ╚══════════════════════════════════════════════════════════╝
     """)
 
-    # Patch sys.argv so Agent 1 picks up --focus and --num-posts without a
-    # separate argparse pass-through. Other agents ignore unknown argv entries.
-    agent1_argv = [sys.argv[0]]
-    if args.brief:
-        agent1_argv += ["--brief", str(brief_path)]
-    agent1_argv += ["--focus", args.focus, "--num-posts", str(args.num_posts)]
+    # Patch sys.argv so Agent 1 picks up --focus and --num-posts.
+    # Skipped when from_agent > 1 (frontend already generated posts).
     original_argv = sys.argv
-    sys.argv = agent1_argv
+    if args.from_agent <= 1:
+        agent1_argv = [sys.argv[0]]
+        if args.brief:
+            agent1_argv += ["--brief", str(brief_path)]
+        agent1_argv += ["--focus", args.focus, "--num-posts", str(args.num_posts)]
+        sys.argv = agent1_argv
 
     agents = [
         (agent_1_campaign_data,         "Task 1: Campaign Data Generation"),
@@ -110,6 +120,9 @@ def main():
     ]
 
     for i, (agent_module, agent_name) in enumerate(agents, 1):
+        if i < args.from_agent:
+            continue
+
         # Restore argv after Agent 1 so subsequent agents parse cleanly
         if i == 2:
             sys.argv = original_argv
@@ -121,7 +134,7 @@ def main():
             print("  Fix errors above and re-run")
             sys.exit(1)
 
-        if i < len(agents):
+        if i < len(agents) and not args.auto:
             response = input(f"\n→ Task {i} complete. Continue to Task {i+1}? [Y/n] ")
             if response.lower() == "n":
                 print(f"\n⏸  Pipeline paused after Task {i}")
