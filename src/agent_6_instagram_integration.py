@@ -15,7 +15,7 @@ import requests
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.settings import (
-    CSV_PATH, CSV_COLUMNS, IMAGES_DIR,
+    CSV_PATH, CSV_COLUMNS, IMAGES_DIR, PROJECT_ROOT,
     STATUS_READY, STATUS_SCHEDULED,
     INSTAGRAM_BUSINESS_ACCOUNT_ID,
     INSTAGRAM_ACCESS_TOKEN,
@@ -46,26 +46,24 @@ def check_credentials():
     if not INSTAGRAM_ACCESS_TOKEN:
         print("✗ Missing INSTAGRAM_ACCESS_TOKEN in .env")
         return False
-    if not IMAGE_HOST_BASE_URL:
-        print("⚠ Warning: IMAGE_HOST_BASE_URL not set - using local file paths")
+    if not IMAGE_HOST_BASE_URL or IMAGE_HOST_BASE_URL.startswith("TODO_") or "your-image-host" in IMAGE_HOST_BASE_URL:
+        print("✗ IMAGE_HOST_BASE_URL is missing or still a placeholder in .env")
         print("  Instagram API requires publicly accessible image URLs")
         return False
     return True
 
 def upload_to_image_host(local_path):
     """
-    Upload image to hosting service and return public URL.
+    Return a public URL for a locally generated image.
 
-    TODO: Implement actual upload to your chosen service:
-    - AWS S3
-    - Cloudinary
-    - Imgur
-    - Your own CDN
-
-    For now, constructs URL assuming images are already hosted.
+    Images aren't uploaded anywhere separately — server.py mounts each campaign's
+    images/ dir as static files at /campaigns/<session_id>/images/<file>. So the
+    public URL is just IMAGE_HOST_BASE_URL (the deployed Railway backend's root)
+    plus the image's path relative to the project root. Keep this in sync with
+    the StaticFiles mount in server.py if either one changes.
     """
-    filename = local_path.name
-    public_url = f"{IMAGE_HOST_BASE_URL.rstrip('/')}/{filename}"
+    relative_path = local_path.resolve().relative_to(PROJECT_ROOT).as_posix()
+    public_url = f"{IMAGE_HOST_BASE_URL.rstrip('/')}/{relative_path}"
     return public_url
 
 def create_instagram_container(image_url, caption):
