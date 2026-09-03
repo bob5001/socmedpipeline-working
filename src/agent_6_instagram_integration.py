@@ -1,20 +1,30 @@
 """
 Agent 6: Instagram Graph API Integration
-Creates draft posts on the Instagram Business account for review before publishing.
+Queues posts for future publishing on the Instagram Business account.
 
 NOTE on scheduling: Instagram's native auto-schedule feature (published=false +
-scheduled_publish_time on container creation, so Meta publishes it for you later)
-requires a whitelist grant from Meta that this app doesn't currently have —
-confirmed via a live "(#3) User must be on whitelist" error. Plain container
-creation without those params works fine, so this agent uses that instead:
-it creates an unpublished container (a real draft) and stops. Someone must
-explicitly call publish_draft_posts() (or POST /sessions/{id}/publish on the
-server) to make it go live — Instagram containers expire after ~24 hours if
-never published, so that has to happen same-day.
+scheduled_publish_time on container creation, so Meta publishes it for you
+later) requires a whitelist grant from Meta that this app doesn't currently
+have — confirmed via a live "(#3) User must be on whitelist" error. Creating
+an unpublished container without that whitelist also isn't a real substitute:
+those containers expire after ~24 hours, too short a review window.
+
+So scheduling is handled entirely on our side instead: this agent does NOT
+call the Instagram API when a post becomes ready. It just records a target
+time (INSTAGRAM_SCHEDULE_DAYS_AHEAD days out) and stops — facebook_status
+becomes STATUS_SCHEDULED with scheduled_publish_at set, no container exists
+yet. publish_scheduled_posts.py (run periodically by a Railway Cron Job
+service, across every campaign) creates the container AND publishes it in one
+step, but only once that target time has arrived — so there's no expiry clock
+running while a post waits. publish_due_posts() below is the same idea
+scoped to one campaign, for manual/local use or the server's
+POST /sessions/{id}/publish endpoint (which force-publishes immediately,
+skipping the scheduled_publish_at check).
 """
 
 import csv
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 import requests
 
@@ -23,10 +33,11 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from config.settings import (
     CSV_PATH, CSV_COLUMNS, IMAGES_DIR, PROJECT_ROOT,
-    STATUS_READY, STATUS_DRAFT_CREATED, STATUS_SCHEDULED,
+    STATUS_READY, STATUS_SCHEDULED, STATUS_PUBLISHED, STATUS_FAILED,
     INSTAGRAM_BUSINESS_ACCOUNT_ID,
     INSTAGRAM_ACCESS_TOKEN,
     IMAGE_HOST_BASE_URL,
+    INSTAGRAM_SCHEDULE_DAYS_AHEAD,
 )
 
 def read_posts_csv():
@@ -74,7 +85,7 @@ def upload_to_image_host(local_path):
 
 def create_instagram_container(image_url, caption):
     """
-    Create an Instagram media container. Left unpublished — this IS the draft.
+    Create an Instagram media container.
     Returns container_id or None on error.
     """
     url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_BUSINESS_ACCOUNT_ID}/media"
@@ -104,9 +115,8 @@ def create_instagram_container(image_url, caption):
 
 def publish_container(container_id):
     """
-    Publish a previously-created draft container, making it go live.
-    Returns the published media id, or None on error (including expiry —
-    Instagram drops unpublished containers after ~24 hours).
+    Publish a container, making it go live immediately.
+    Returns the published media id, or None on error.
     """
     url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_BUSINESS_ACCOUNT_ID}/media_publish"
 
@@ -132,63 +142,88 @@ def publish_container(container_id):
             print(f"    Response: {e.response.text}")
         return None
 
-def create_instagram_draft(image_path, overlay_text, caption, hashtags):
+def publish_post_row(row: dict, images_dir: Path) -> bool:
     """
-    Upload the image URL and create an unpublished draft container.
-    Returns the container_id, or None on error.
-    """
-    full_caption = f"{caption}\n\n{hashtags}"
+    Create a container and immediately publish it for one CSV row. Mutates
+    row in place: sets facebook_status to STATUS_PUBLISHED or STATUS_FAILED,
+    and instagram_container_id on success.
 
-    print(f"  Image: {image_path.name}")
-    print(f"  Overlay: {overlay_text}")
-    print(f"  Caption: {caption[:60]}...")
+    Shared by publish_due_posts() (single campaign) and
+    publish_scheduled_posts.py (the cron sweep across every campaign) — the
+    only two places that should ever actually call the Instagram API to
+    publish something.
+    """
+    image_path = images_dir / f"{row['post_id']}-final.png"
+    if not image_path.exists():
+        print(f"  ✗ {row['post_id']}: final image not found at {image_path}")
+        row['facebook_status'] = STATUS_FAILED
+        return False
+
+    full_caption = f"{row['caption']}\n\n{row['hashtags']}"
 
     try:
-        public_image_url = upload_to_image_host(image_path)
-        print(f"  Image URL: {public_image_url[:60]}...")
+        public_url = upload_to_image_host(image_path)
     except Exception as e:
-        print(f"  ✗ Error getting image URL: {e}")
-        return None
+        print(f"  ✗ {row['post_id']}: error getting image URL: {e}")
+        row['facebook_status'] = STATUS_FAILED
+        return False
 
-    container_id = create_instagram_container(public_image_url, full_caption)
+    container_id = create_instagram_container(public_url, full_caption)
     if not container_id:
-        return None
+        row['facebook_status'] = STATUS_FAILED
+        return False
 
-    print(f"  ✓ Draft container created: {container_id} (publish within ~24h before it expires)")
-    return container_id
+    media_id = publish_container(container_id)
+    if not media_id:
+        row['facebook_status'] = STATUS_FAILED
+        return False
 
-def publish_draft_posts():
+    row['facebook_status'] = STATUS_PUBLISHED
+    row['instagram_container_id'] = container_id
+    print(f"  ✓ {row['post_id']}: published (Media ID: {media_id})")
+    return True
+
+def publish_due_posts(force: bool = False):
     """
-    Publish every post currently sitting as a draft (facebook_status ==
-    STATUS_DRAFT_CREATED with a stored container_id). Called explicitly —
-    by a human running this module with --publish-drafts, or by the server's
-    POST /sessions/{id}/publish endpoint — never automatically.
-    Returns (published_count, total_drafts).
+    Publish posts in THIS campaign (config.settings.CSV_PATH — set CAMPAIGN_DIR
+    before importing this module to target a specific one) whose scheduled
+    time has arrived. force=True ignores scheduled_publish_at and publishes
+    every STATUS_SCHEDULED post immediately — used for a manual "publish now"
+    override, e.g. via POST /sessions/{id}/publish.
+    Returns (published_count, checked_count).
     """
     posts = read_posts_csv()
-    drafts = [p for p in posts if p['facebook_status'] == STATUS_DRAFT_CREATED and p.get('instagram_container_id')]
+    now = datetime.now()
+    due = []
+    for row in posts:
+        if row.get('facebook_status') != STATUS_SCHEDULED:
+            continue
+        if force:
+            due.append(row)
+            continue
+        target = row.get('scheduled_publish_at', '')
+        try:
+            if target and datetime.fromisoformat(target) <= now:
+                due.append(row)
+        except ValueError:
+            continue
 
-    if not drafts:
-        print("No drafts ready to publish.")
+    if not due:
+        print("No due posts to publish.")
         return 0, 0
 
     published_count = 0
-    for post in posts:
-        if post['facebook_status'] == STATUS_DRAFT_CREATED and post.get('instagram_container_id'):
-            print(f"\n{post['post_id']} (container {post['instagram_container_id']})")
-            media_id = publish_container(post['instagram_container_id'])
-            if media_id:
-                post['facebook_status'] = STATUS_SCHEDULED
-                print(f"  ✓ Published (Media ID: {media_id})")
-                published_count += 1
-            else:
-                print(f"  ✗ Failed to publish — container may have expired (~24h limit)")
+    for row in due:
+        print(f"\n{row['post_id']}")
+        if publish_post_row(row, IMAGES_DIR):
+            published_count += 1
 
     write_posts_csv(posts)
-    return published_count, len(drafts)
+    return published_count, len(due)
 
 def main():
-    """Create draft containers for every post that's ready."""
+    """Queue every ready post with a target publish time. No API calls here —
+    see the module docstring for why publishing is deferred to a cron sweep."""
     print("Agent 6: Instagram Graph API Integration")
     print("=" * 50)
 
@@ -200,11 +235,12 @@ def main():
         print("\nSee README for setup instructions.")
         return
 
-    # Read CSV
+    print(f"Schedule settings: {INSTAGRAM_SCHEDULE_DAYS_AHEAD} days ahead")
+    print()
+
     posts = read_posts_csv()
     print(f"Found {len(posts)} posts in queue")
 
-    # Filter posts ready for Instagram
     ready_posts = [p for p in posts if p['facebook_status'] == STATUS_READY]
     print(f"Posts ready for Instagram: {len(ready_posts)}")
 
@@ -212,7 +248,7 @@ def main():
         print("No posts ready for Instagram. Complete pipeline first.")
         return
 
-    draft_count = 0
+    queued_count = 0
 
     for post in posts:
         if post['facebook_status'] == STATUS_READY:
@@ -222,38 +258,32 @@ def main():
                 print(f"✗ {post['post_id']}: Final image not found")
                 continue
 
-            print(f"\n{post['post_id']}")
-            container_id = create_instagram_draft(
-                image_path,
-                post['overlay_text'],
-                post['caption'],
-                post['hashtags']
-            )
+            target_time = datetime.now() + timedelta(days=INSTAGRAM_SCHEDULE_DAYS_AHEAD)
+            post['facebook_status'] = STATUS_SCHEDULED
+            post['scheduled_publish_at'] = target_time.isoformat()
+            print(f"{post['post_id']}: queued for {target_time.strftime('%Y-%m-%d %H:%M')}")
+            queued_count += 1
 
-            if container_id:
-                post['facebook_status'] = STATUS_DRAFT_CREATED
-                post['instagram_container_id'] = container_id
-                draft_count += 1
-            else:
-                print(f"  ✗ Failed to create draft")
-
-    if draft_count > 0:
+    if queued_count > 0:
         write_posts_csv(posts)
-        print(f"\n✓ Updated CSV with draft status")
+        print(f"\n✓ Updated CSV with scheduled status")
 
     print(f"\n✓ Task 6 complete.")
-    print(f"  Drafts created: {draft_count}/{len(ready_posts)}")
+    print(f"  Posts queued: {queued_count}/{len(ready_posts)}")
 
-    if draft_count > 0:
+    if queued_count > 0:
         print(f"\n✓✓ PIPELINE COMPLETE")
-        print(f"  {draft_count} draft(s) created on Instagram Business account — NOT yet live")
-        print(f"  Publish within ~24h (containers expire after that) via publish_draft_posts()")
-        print(f"  or POST /sessions/<id>/publish, or discard by simply not publishing.")
-        print('  Suggested: git add posts-queue.csv && git commit -m "Created Instagram drafts"')
+        print(f"  {queued_count} post(s) queued — no Instagram API calls made yet.")
+        print(f"  publish_scheduled_posts.py (run by Railway Cron) publishes each")
+        print(f"  one automatically once its scheduled_publish_at arrives.")
+        print('  Suggested: git add posts-queue.csv && git commit -m "Queued posts for Instagram"')
 
 if __name__ == "__main__":
-    if "--publish-drafts" in sys.argv:
-        published, total = publish_draft_posts()
-        print(f"\n✓ Published {published}/{total} drafts")
+    if "--publish-due" in sys.argv:
+        published, checked = publish_due_posts(force=False)
+        print(f"\n✓ Published {published}/{checked} due posts")
+    elif "--publish-now" in sys.argv:
+        published, checked = publish_due_posts(force=True)
+        print(f"\n✓ Published {published}/{checked} scheduled posts")
     else:
         main()

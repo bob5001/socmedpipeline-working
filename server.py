@@ -6,9 +6,10 @@ Endpoints:
   POST /sessions          Accept a brief JSON body, create campaign dir, launch pipeline
   GET  /sessions/{id}     Return campaign status
   GET  /sessions/{id}/log Return pipeline stdout log
-  POST /sessions/{id}/publish  Publish that session's Instagram drafts (Agent 6 creates
-                           unpublished containers, not live posts — this is the explicit
-                           step that makes them go live; containers expire after ~24h)
+  POST /sessions/{id}/publish  Force-publish that session's queued posts immediately,
+                           skipping their scheduled_publish_at time. Normal scheduled
+                           publishing happens via publish_scheduled_posts.py on a
+                           Railway Cron Job, not through this endpoint.
   GET  /health            Liveness check
   GET  /campaigns/...     Static file serving for generated images (Agent 6 / Instagram
                            needs a publicly reachable URL for each final image; see
@@ -58,7 +59,7 @@ _CSV_COLUMNS = [
     "post_id", "campaign_id", "content_pillar", "image_prompt",
     "overlay_text", "caption", "hashtags",
     "image_status", "vision_status", "design_status", "facebook_status",
-    "instagram_container_id",
+    "instagram_container_id", "scheduled_publish_at",
 ]
 
 
@@ -116,6 +117,7 @@ def _write_posts_csv(campaign_dir: Path, brief: dict, posts: list[dict]) -> None
             "design_status": "pending",
             "facebook_status": "pending",
             "instagram_container_id": "",
+            "scheduled_publish_at": "",
         })
     csv_path = campaign_dir / "posts-queue.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -148,10 +150,12 @@ async def get_log(session_id: str):
 @app.post("/sessions/{session_id}/publish")
 async def publish_session(session_id: str):
     """
-    Publish that session's Instagram drafts (facebook_status == draft_created).
-    Agent 6 only ever creates unpublished containers — nothing goes live until
-    this is called explicitly. Runs synchronously since it's a small number of
-    API calls, not a full pipeline pass.
+    Force-publish this session's queued posts (facebook_status == scheduled)
+    right now, ignoring their scheduled_publish_at time. Normal scheduled
+    publishing happens on its own via publish_scheduled_posts.py, run
+    periodically by a Railway Cron Job — this endpoint is only for a manual
+    "publish now instead of waiting" override. Runs synchronously since it's
+    a small number of API calls, not a full pipeline pass.
     """
     campaign_dir = CAMPAIGNS_DIR / session_id
     if not campaign_dir.exists():
@@ -160,7 +164,7 @@ async def publish_session(session_id: str):
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         str(PROJECT_ROOT / "src" / "agent_6_instagram_integration.py"),
-        "--publish-drafts",
+        "--publish-now",
         cwd=str(PROJECT_ROOT),
         env={**os.environ, "CAMPAIGN_DIR": str(campaign_dir)},
         stdout=asyncio.subprocess.PIPE,
