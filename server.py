@@ -6,6 +6,9 @@ Endpoints:
   POST /sessions          Accept a brief JSON body, create campaign dir, launch pipeline
   GET  /sessions/{id}     Return campaign status
   GET  /sessions/{id}/log Return pipeline stdout log
+  POST /sessions/{id}/publish  Publish that session's Instagram drafts (Agent 6 creates
+                           unpublished containers, not live posts — this is the explicit
+                           step that makes them go live; containers expire after ~24h)
   GET  /health            Liveness check
   GET  /campaigns/...     Static file serving for generated images (Agent 6 / Instagram
                            needs a publicly reachable URL for each final image; see
@@ -15,6 +18,7 @@ Endpoints:
 import asyncio
 import csv
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -48,10 +52,13 @@ app.add_middleware(
 app.mount("/campaigns", StaticFiles(directory=CAMPAIGNS_DIR), name="campaign-images")
 
 
+# Kept in sync with config.settings.CSV_COLUMNS by hand — this module writes
+# the CSV before any agent (which import settings) has run.
 _CSV_COLUMNS = [
     "post_id", "campaign_id", "content_pillar", "image_prompt",
     "overlay_text", "caption", "hashtags",
     "image_status", "vision_status", "design_status", "facebook_status",
+    "instagram_container_id",
 ]
 
 
@@ -108,6 +115,7 @@ def _write_posts_csv(campaign_dir: Path, brief: dict, posts: list[dict]) -> None
             "vision_status": "pending",
             "design_status": "pending",
             "facebook_status": "pending",
+            "instagram_container_id": "",
         })
     csv_path = campaign_dir / "posts-queue.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -135,6 +143,35 @@ async def get_log(session_id: str):
     if not log_path.exists():
         raise HTTPException(status_code=404, detail="No log yet")
     return {"log": log_path.read_text(errors="replace")}
+
+
+@app.post("/sessions/{session_id}/publish")
+async def publish_session(session_id: str):
+    """
+    Publish that session's Instagram drafts (facebook_status == draft_created).
+    Agent 6 only ever creates unpublished containers — nothing goes live until
+    this is called explicitly. Runs synchronously since it's a small number of
+    API calls, not a full pipeline pass.
+    """
+    campaign_dir = CAMPAIGNS_DIR / session_id
+    if not campaign_dir.exists():
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(PROJECT_ROOT / "src" / "agent_6_instagram_integration.py"),
+        "--publish-drafts",
+        cwd=str(PROJECT_ROOT),
+        env={**os.environ, "CAMPAIGN_DIR": str(campaign_dir)},
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await proc.communicate()
+    output = stdout.decode(errors="replace")
+
+    (campaign_dir / "publish.log").write_text(output)
+
+    return {"session_id": session_id, "output": output}
 
 
 @app.get("/health")

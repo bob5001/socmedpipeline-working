@@ -52,7 +52,8 @@ CSV_COLUMNS = [
     "image_status",
     "vision_status",
     "design_status",
-    "facebook_status"
+    "facebook_status",
+    "instagram_container_id",  # set when Agent 6 creates an unpublished draft container
 ]
 
 # Status values
