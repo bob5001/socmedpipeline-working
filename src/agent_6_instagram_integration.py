@@ -66,9 +66,17 @@ def upload_to_image_host(local_path):
     public_url = f"{IMAGE_HOST_BASE_URL.rstrip('/')}/{relative_path}"
     return public_url
 
-def create_instagram_container(image_url, caption):
+def create_instagram_container(image_url, caption, scheduled_publish_time=None):
     """
     Step 1: Create Instagram media container.
+
+    Scheduling happens HERE, not on the publish call: pass scheduled_publish_time
+    (a Unix timestamp, 10 minutes to 75 days out) and Instagram creates the
+    container as unpublished and auto-publishes it server-side at that time —
+    no follow-up call needed. `/media_publish` does not accept
+    scheduled_publish_time at all; passing it there is silently ignored and the
+    container publishes immediately, which is the bug this replaced.
+
     Returns container_id or None on error.
     """
     url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_BUSINESS_ACCOUNT_ID}/media"
@@ -78,6 +86,9 @@ def create_instagram_container(image_url, caption):
         "caption": caption,
         "access_token": INSTAGRAM_ACCESS_TOKEN
     }
+    if scheduled_publish_time is not None:
+        params["published"] = "false"
+        params["scheduled_publish_time"] = scheduled_publish_time
 
     try:
         response = requests.post(url, params=params, timeout=30)
@@ -96,25 +107,19 @@ def create_instagram_container(image_url, caption):
             print(f"    Response: {e.response.text}")
         return None
 
-def schedule_instagram_publish(container_id, days_ahead=7):
+def publish_container(container_id):
     """
-    Step 2: Schedule (or immediately publish) the media container.
-    Returns True on success, False on error.
+    Immediately publish a container that was created WITHOUT a schedule.
+    Only used when INSTAGRAM_SCHEDULE_DAYS_AHEAD is 0 (publish now, no review
+    window). Scheduled containers publish themselves — never call this on one.
+    Returns the published media id, or None on error.
     """
     url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_BUSINESS_ACCOUNT_ID}/media_publish"
-
-    # Calculate future timestamp (days ahead for review)
-    schedule_time = datetime.now() + timedelta(days=days_ahead)
-    unix_timestamp = int(schedule_time.timestamp())
 
     params = {
         "creation_id": container_id,
         "access_token": INSTAGRAM_ACCESS_TOKEN
     }
-
-    # Schedule for future (between 10 minutes and 75 days from now)
-    if days_ahead > 0:
-        params["scheduled_publish_time"] = unix_timestamp
 
     try:
         response = requests.post(url, params=params, timeout=30)
@@ -122,22 +127,22 @@ def schedule_instagram_publish(container_id, days_ahead=7):
         data = response.json()
 
         if "id" in data:
-            schedule_date = schedule_time.strftime("%Y-%m-%d %H:%M")
-            print(f"  ✓ Scheduled for {schedule_date}")
             return data["id"]
         else:
             print(f"  ✗ No media ID in response: {data}")
             return None
 
     except requests.exceptions.RequestException as e:
-        print(f"  ✗ Error scheduling publish: {e}")
+        print(f"  ✗ Error publishing container: {e}")
         if hasattr(e.response, 'text'):
             print(f"    Response: {e.response.text}")
         return None
 
 def create_scheduled_instagram_post(post_id, image_path, overlay_text, caption, hashtags):
     """
-    Full workflow: Upload image, create container, schedule publish.
+    Full workflow: upload image, create container (scheduled or immediate).
+    Returns the scheduled container's id, or the published media's id if
+    INSTAGRAM_SCHEDULE_DAYS_AHEAD is 0.
     """
     # Combine caption and hashtags for Instagram
     full_caption = f"{caption}\n\n{hashtags}"
@@ -154,22 +159,34 @@ def create_scheduled_instagram_post(post_id, image_path, overlay_text, caption, 
         print(f"  ✗ Error getting image URL: {e}")
         return None
 
-    # Step 2: Create media container
-    container_id = create_instagram_container(public_image_url, full_caption)
-    if not container_id:
-        return None
+    if INSTAGRAM_SCHEDULE_DAYS_AHEAD > 0:
+        # Scheduled: pass the timestamp at container creation; Instagram
+        # publishes it automatically later. No media_publish call.
+        schedule_time = datetime.now() + timedelta(days=INSTAGRAM_SCHEDULE_DAYS_AHEAD)
+        container_id = create_instagram_container(
+            public_image_url, full_caption, scheduled_publish_time=int(schedule_time.timestamp())
+        )
+        if not container_id:
+            return None
 
-    print(f"  ✓ Container created: {container_id}")
+        schedule_date = schedule_time.strftime("%Y-%m-%d %H:%M")
+        print(f"  ✓ Container created and scheduled for {schedule_date} (id: {container_id})")
+        return container_id
+    else:
+        # Publish now: create an unscheduled container, then publish it.
+        container_id = create_instagram_container(public_image_url, full_caption)
+        if not container_id:
+            return None
 
-    # Brief delay between API calls
-    time.sleep(1)
+        print(f"  ✓ Container created: {container_id}")
+        time.sleep(1)  # brief delay between API calls
 
-    # Step 3: Schedule publish
-    media_id = schedule_instagram_publish(container_id, INSTAGRAM_SCHEDULE_DAYS_AHEAD)
-    if not media_id:
-        return None
+        media_id = publish_container(container_id)
+        if not media_id:
+            return None
 
-    return media_id
+        print(f"  ✓ Published immediately (Media ID: {media_id})")
+        return media_id
 
 def main():
     """Main execution."""
@@ -212,7 +229,10 @@ def main():
                 continue
 
             print(f"\n{post['post_id']}")
-            media_id = create_scheduled_instagram_post(
+            # Returns a scheduled container's id, or a published media's id if
+            # INSTAGRAM_SCHEDULE_DAYS_AHEAD is 0 — create_scheduled_instagram_post
+            # already printed which one happened.
+            result_id = create_scheduled_instagram_post(
                 post['post_id'],
                 image_path,
                 post['overlay_text'],
@@ -220,9 +240,8 @@ def main():
                 post['hashtags']
             )
 
-            if media_id:
+            if result_id:
                 post['facebook_status'] = STATUS_SCHEDULED
-                print(f"  ✓ Scheduled (Media ID: {media_id})")
                 scheduled_count += 1
             else:
                 print(f"  ✗ Failed to schedule")
