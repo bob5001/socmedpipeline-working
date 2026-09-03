@@ -7,6 +7,9 @@ Endpoints:
   GET  /sessions/{id}     Return campaign status
   GET  /sessions/{id}/log Return pipeline stdout log
   GET  /health            Liveness check
+  GET  /campaigns/...     Static file serving for generated images (Agent 6 / Instagram
+                           needs a publicly reachable URL for each final image; see
+                           IMAGE_HOST_BASE_URL in .env and agent_6_instagram_integration.py)
 """
 
 import asyncio
@@ -19,6 +22,7 @@ from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 PROJECT_ROOT = Path(__file__).parent
@@ -36,6 +40,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serves every campaign's images/ dir publicly at /campaigns/<session_id>/images/<file>.
+# Agent 6 builds Instagram image URLs as IMAGE_HOST_BASE_URL + that same relative path
+# (see upload_to_image_host in agent_6_instagram_integration.py), so this mount and that
+# URL construction must stay in sync.
+app.mount("/campaigns", StaticFiles(directory=CAMPAIGNS_DIR), name="campaign-images")
 
 
 _CSV_COLUMNS = [
