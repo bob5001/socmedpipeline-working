@@ -53,7 +53,8 @@ CSV_COLUMNS = [
     "vision_status",
     "design_status",
     "facebook_status",
-    "instagram_container_id",  # set when Agent 6 creates an unpublished draft container
+    "instagram_container_id",   # set once Agent 6 actually creates+publishes the container
+    "scheduled_publish_at",     # ISO datetime a scheduled post becomes due; set by Agent 6, read by publish_scheduled_posts.py
 ]
 
 # Status values
@@ -63,8 +64,9 @@ STATUS_APPROVED = "approved"
 STATUS_REJECTED = "rejected"
 STATUS_COMPLETE = "complete"
 STATUS_READY = "ready"
-STATUS_DRAFT_CREATED = "draft_created"
-STATUS_SCHEDULED = "scheduled"
+STATUS_DRAFT_CREATED = "draft_created"  # unused for now — see agent_6_instagram_integration.py docstring
+STATUS_SCHEDULED = "scheduled"          # queued, waiting for scheduled_publish_at (or a manual force-publish)
+STATUS_PUBLISHED = "published"          # confirmed live on Instagram
 STATUS_FAILED = "failed"
 
 # Instagram Graph API settings
