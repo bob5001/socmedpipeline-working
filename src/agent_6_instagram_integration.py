@@ -13,13 +13,14 @@ So scheduling is handled entirely on our side instead: this agent does NOT
 call the Instagram API when a post becomes ready. It just records a target
 time (INSTAGRAM_SCHEDULE_DAYS_AHEAD days out) and stops — facebook_status
 becomes STATUS_SCHEDULED with scheduled_publish_at set, no container exists
-yet. publish_scheduled_posts.py (run periodically by a Railway Cron Job
-service, across every campaign) creates the container AND publishes it in one
-step, but only once that target time has arrived — so there's no expiry clock
-running while a post waits. publish_due_posts() below is the same idea
-scoped to one campaign, for manual/local use or the server's
-POST /sessions/{id}/publish endpoint (which force-publishes immediately,
-skipping the scheduled_publish_at check).
+yet. publish_scheduled_posts.py (across every campaign, triggered via the
+server's POST /admin/publish-due — see that module and server.py's docstring
+for why it's HTTP-triggered rather than run as its own Railway service)
+creates the container AND publishes it in one step, but only once that
+target time has arrived — so there's no expiry clock running while a post
+waits. publish_due_posts() below is the same idea scoped to one campaign,
+for manual/local use or the server's POST /sessions/{id}/publish endpoint
+(which force-publishes immediately, skipping the scheduled_publish_at check).
 """
 
 import csv
@@ -32,7 +33,7 @@ import requests
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.settings import (
-    CSV_PATH, CSV_COLUMNS, IMAGES_DIR, PROJECT_ROOT,
+    CSV_PATH, CSV_COLUMNS, IMAGES_DIR, PERSIST_DIR,
     STATUS_READY, STATUS_SCHEDULED, STATUS_PUBLISHED, STATUS_FAILED,
     INSTAGRAM_BUSINESS_ACCOUNT_ID,
     INSTAGRAM_ACCESS_TOKEN,
@@ -76,10 +77,11 @@ def upload_to_image_host(local_path):
     Images aren't uploaded anywhere separately — server.py mounts each campaign's
     images/ dir as static files at /campaigns/<session_id>/images/<file>. So the
     public URL is just IMAGE_HOST_BASE_URL (the deployed Railway backend's root)
-    plus the image's path relative to the project root. Keep this in sync with
-    the StaticFiles mount in server.py if either one changes.
+    plus the image's path relative to PERSIST_DIR (server.py's CAMPAIGNS_DIR is
+    PERSIST_DIR/campaigns, matching the /campaigns mount). Keep this in sync
+    with the StaticFiles mount in server.py if either one changes.
     """
-    relative_path = local_path.resolve().relative_to(PROJECT_ROOT).as_posix()
+    relative_path = local_path.resolve().relative_to(PERSIST_DIR).as_posix()
     public_url = f"{IMAGE_HOST_BASE_URL.rstrip('/')}/{relative_path}"
     return public_url
 
@@ -274,8 +276,8 @@ def main():
     if queued_count > 0:
         print(f"\n✓✓ PIPELINE COMPLETE")
         print(f"  {queued_count} post(s) queued — no Instagram API calls made yet.")
-        print(f"  publish_scheduled_posts.py (run by Railway Cron) publishes each")
-        print(f"  one automatically once its scheduled_publish_at arrives.")
+        print(f"  A Railway Cron Job pings POST /admin/publish-due periodically, which")
+        print(f"  publishes each one automatically once its scheduled_publish_at arrives.")
         print('  Suggested: git add posts-queue.csv && git commit -m "Queued posts for Instagram"')
 
 if __name__ == "__main__":

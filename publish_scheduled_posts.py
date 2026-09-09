@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 """
-Cron entry point: publish every post, across every campaign, whose scheduled
-time has arrived. Intended to run periodically as a Railway Cron Job service
-(same repo, separate service, e.g. every 15 minutes — see README for setup).
+Publish every post, across every campaign, whose scheduled time has arrived.
+
+Run this by calling POST /admin/publish-due on the deployed web service, not
+by deploying it as its own Railway service. Railway volumes can't be shared
+between services (confirmed with Railway support — their own recommendation
+for cross-service shared state is external object storage, not volumes), and
+campaign data lives on a Volume mounted on the web service only. A separate
+Cron Job service running this script directly would see an empty, unmounted
+filesystem — nothing to publish, ever. trigger_publish.py is what the actual
+Railway Cron Job service runs instead: it just POSTs to /admin/publish-due,
+and this script executes as a subprocess of the web service's own container
+(server.py's publish_due() handler), so it shares that process's mounted
+PERSIST_DIR. Still directly runnable locally for manual testing.
 
 Runs as a single pass over campaigns/*/posts-queue.csv rather than going
 through Agent 6's normal per-campaign config (config.settings.CAMPAIGN_DIR is
@@ -21,10 +31,10 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent))
 
-from config.settings import PROJECT_ROOT, CSV_COLUMNS, STATUS_SCHEDULED
+from config.settings import PERSIST_DIR, CSV_COLUMNS, STATUS_SCHEDULED
 from src.agent_6_instagram_integration import check_credentials, publish_post_row
 
-CAMPAIGNS_DIR = PROJECT_ROOT / "campaigns"
+CAMPAIGNS_DIR = PERSIST_DIR / "campaigns"
 
 def process_campaign_csv(csv_path: Path) -> int:
     """Publish due posts in one campaign's CSV. Returns count published."""
