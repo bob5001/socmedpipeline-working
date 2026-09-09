@@ -10,9 +10,22 @@ load_dotenv()
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
 
+# Root for anything that must survive a redeploy: campaigns/, briefs/, images.
+# Defaults to the repo root (unchanged local-dev behavior). In production this
+# is set to a Railway Volume's mount path on the web service ONLY — Railway
+# volumes cannot be shared between services, so anything reading/writing here
+# must run inside that one service's container (subprocess is fine; a separate
+# Railway service is not). See publish_scheduled_posts.py and server.py's
+# /admin/publish-due for how the cron flow works around that.
+# .resolve() matters here, not just cosmetic: agent_6 computes a path relative
+# to PERSIST_DIR after calling .resolve() on the image path, so both sides
+# need to go through symlinks the same way (e.g. macOS /tmp -> /private/tmp)
+# or relative_to() raises even though the paths are the same location.
+PERSIST_DIR = Path(os.getenv("PERSIST_DIR", str(PROJECT_ROOT))).resolve()
+
 # Per-campaign output directory. Set CAMPAIGN_DIR env var before importing to
-# isolate each brief's outputs. Falls back to project root for legacy runs.
-CAMPAIGN_DIR = Path(os.getenv("CAMPAIGN_DIR", str(PROJECT_ROOT)))
+# isolate each brief's outputs. Falls back to PERSIST_DIR for legacy runs.
+CAMPAIGN_DIR = Path(os.getenv("CAMPAIGN_DIR", str(PERSIST_DIR))).resolve()
 IMAGES_DIR = CAMPAIGN_DIR / "images"
 CSV_PATH = CAMPAIGN_DIR / "posts-queue.csv"
 STATUS_PATH = CAMPAIGN_DIR / "pipeline-status.json"
@@ -38,7 +51,7 @@ CAMPAIGN_ID = os.getenv("CAMPAIGN_ID", "signal-sanctuary-ehs-awareness")
 CAMPAIGN_BRIEF_PATH = Path(os.getenv("CAMPAIGN_BRIEF_PATH", str(PROJECT_ROOT / "Signal Sanctuary — EHS Awareness Campa.md")))
 
 # Directory where frontend-generated JSON briefs are saved
-BRIEFS_DIR = Path(os.getenv("BRIEFS_DIR", str(PROJECT_ROOT / "briefs")))
+BRIEFS_DIR = Path(os.getenv("BRIEFS_DIR", str(PERSIST_DIR / "briefs")))
 
 # CSV column definitions
 CSV_COLUMNS = [

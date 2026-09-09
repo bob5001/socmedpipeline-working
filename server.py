@@ -7,13 +7,23 @@ Endpoints:
   GET  /sessions/{id}     Return campaign status
   GET  /sessions/{id}/log Return pipeline stdout log
   POST /sessions/{id}/publish  Force-publish that session's queued posts immediately,
-                           skipping their scheduled_publish_at time. Normal scheduled
-                           publishing happens via publish_scheduled_posts.py on a
-                           Railway Cron Job, not through this endpoint.
+                           skipping their scheduled_publish_at time — a manual override.
+  POST /admin/publish-due Sweep every campaign for posts whose scheduled_publish_at has
+                           arrived and publish them. This is the real cron endpoint: a
+                           separate Railway Cron Job service can't touch this service's
+                           files directly (Railway volumes aren't shareable across
+                           services), so it just calls this over HTTP instead — see
+                           trigger_publish.py and publish_scheduled_posts.py.
   GET  /health            Liveness check
   GET  /campaigns/...     Static file serving for generated images (Agent 6 / Instagram
                            needs a publicly reachable URL for each final image; see
                            IMAGE_HOST_BASE_URL in .env and agent_6_instagram_integration.py)
+
+Persistence: PROJECT_ROOT is the repo checkout (ephemeral — wiped on every
+redeploy). BRIEFS_DIR/CAMPAIGNS_DIR live under PERSIST_DIR instead, which in
+production is a Railway Volume mounted on this service only (env var
+PERSIST_DIR, e.g. /data) so campaign data survives redeploys. Defaults to
+PROJECT_ROOT for local dev, where redeploys aren't a concern.
 """
 
 import asyncio
@@ -31,11 +41,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 PROJECT_ROOT = Path(__file__).parent
-BRIEFS_DIR = PROJECT_ROOT / "briefs"
-CAMPAIGNS_DIR = PROJECT_ROOT / "campaigns"
+PERSIST_DIR = Path(os.getenv("PERSIST_DIR", str(PROJECT_ROOT)))
+BRIEFS_DIR = PERSIST_DIR / "briefs"
+CAMPAIGNS_DIR = PERSIST_DIR / "campaigns"
 
-BRIEFS_DIR.mkdir(exist_ok=True)
-CAMPAIGNS_DIR.mkdir(exist_ok=True)
+BRIEFS_DIR.mkdir(parents=True, exist_ok=True)
+CAMPAIGNS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Social Media Pipeline API", version="0.1.0")
 
@@ -151,11 +162,11 @@ async def get_log(session_id: str):
 async def publish_session(session_id: str):
     """
     Force-publish this session's queued posts (facebook_status == scheduled)
-    right now, ignoring their scheduled_publish_at time. Normal scheduled
-    publishing happens on its own via publish_scheduled_posts.py, run
-    periodically by a Railway Cron Job — this endpoint is only for a manual
-    "publish now instead of waiting" override. Runs synchronously since it's
-    a small number of API calls, not a full pipeline pass.
+    right now, ignoring their scheduled_publish_at time — a manual "publish
+    now instead of waiting" override. Normal scheduled publishing happens on
+    its own via POST /admin/publish-due (see that endpoint). Runs
+    synchronously since it's a small number of API calls, not a full
+    pipeline pass.
     """
     campaign_dir = CAMPAIGNS_DIR / session_id
     if not campaign_dir.exists():
@@ -176,6 +187,30 @@ async def publish_session(session_id: str):
     (campaign_dir / "publish.log").write_text(output)
 
     return {"session_id": session_id, "output": output}
+
+
+@app.post("/admin/publish-due")
+async def publish_due():
+    """
+    Sweep every campaign under CAMPAIGNS_DIR for posts whose
+    scheduled_publish_at has arrived and publish them. This is what a
+    periodic trigger should call — intended to be hit by a separate Railway
+    Cron Job service running trigger_publish.py, since that service can't
+    share this one's Volume and must go through HTTP instead. Runs as a
+    subprocess of THIS service/container, so it sees the same mounted
+    PERSIST_DIR this process does.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(PROJECT_ROOT / "publish_scheduled_posts.py"),
+        cwd=str(PROJECT_ROOT),
+        env=os.environ.copy(),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await proc.communicate()
+    output = stdout.decode(errors="replace")
+    return {"output": output}
 
 
 @app.get("/health")

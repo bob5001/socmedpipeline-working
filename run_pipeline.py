@@ -70,7 +70,11 @@ def main():
             brief_data = json.load(f)
 
         brief_id = brief_data.get("id", brief_path.stem)
-        campaign_dir = Path(__file__).parent / "campaigns" / brief_id
+        # PERSIST_DIR defaults to the repo root for local dev; in production
+        # it's a Railway Volume mount so campaign data survives redeploys —
+        # see config/settings.py and server.py's module docstring.
+        persist_dir = Path(os.environ.get("PERSIST_DIR", str(Path(__file__).parent)))
+        campaign_dir = persist_dir / "campaigns" / brief_id
         campaign_dir.mkdir(parents=True, exist_ok=True)
 
         # Set env vars BEFORE importing agents so settings.py picks them up
