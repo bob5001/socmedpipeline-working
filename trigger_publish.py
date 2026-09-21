@@ -10,7 +10,8 @@ actually runs.
 
 Configure this service's start command as `python3 trigger_publish.py` and
 set WEB_SERVICE_URL to the web service's public Railway domain (e.g.
-https://socmedpipeline-working-production-a90a.up.railway.app).
+https://<your-service>.up.railway.app), and PIPELINE_API_KEY to the same secret
+the web service uses — /admin/publish-due rejects requests without it.
 """
 
 import os
@@ -19,17 +20,21 @@ import sys
 import requests
 
 WEB_SERVICE_URL = os.environ.get("WEB_SERVICE_URL")
+PIPELINE_API_KEY = os.environ.get("PIPELINE_API_KEY")
 
 
 def main():
     if not WEB_SERVICE_URL:
         print("✗ WEB_SERVICE_URL not set on this service — nothing to trigger.")
         sys.exit(1)
+    if not PIPELINE_API_KEY:
+        print("✗ PIPELINE_API_KEY not set on this service — the web service will reject the call.")
+        sys.exit(1)
 
     url = f"{WEB_SERVICE_URL.rstrip('/')}/admin/publish-due"
     print(f"POST {url}")
     try:
-        response = requests.post(url, timeout=120)
+        response = requests.post(url, headers={"X-API-Key": PIPELINE_API_KEY}, timeout=120)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
         print(f"✗ Trigger failed: {e}")

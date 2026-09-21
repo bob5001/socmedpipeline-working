@@ -2,6 +2,13 @@
 """
 FastAPI server — session init and status for the social media pipeline.
 
+Auth: every endpoint except /health and the image route below requires an
+`X-API-Key` header matching the PIPELINE_API_KEY env var (fail-closed: if the env
+var is unset, protected endpoints return 503 rather than running open). Callers:
+the frontend's server-side route (app/api/brief/[id]/route.ts) and the cron
+trigger (trigger_publish.py) — both must have PIPELINE_API_KEY set. No CORS: no
+browser calls this directly. The Swagger UI / OpenAPI schema are disabled.
+
 Endpoints:
   POST /sessions          Accept a brief JSON body, create campaign dir, launch pipeline
   GET  /sessions/{id}     Return campaign status
@@ -14,10 +21,12 @@ Endpoints:
                            files directly (Railway volumes aren't shareable across
                            services), so it just calls this over HTTP instead — see
                            trigger_publish.py and publish_scheduled_posts.py.
-  GET  /health            Liveness check
-  GET  /campaigns/...     Static file serving for generated images (Agent 6 / Instagram
-                           needs a publicly reachable URL for each final image; see
-                           IMAGE_HOST_BASE_URL in .env and agent_6_instagram_integration.py)
+  GET  /health            Liveness check (public)
+  GET  /campaigns/{id}/images/{file}
+                          PUBLIC, image files only (Agent 6 / Instagram needs a publicly
+                           reachable URL for each final image; see IMAGE_HOST_BASE_URL in
+                           .env and agent_6_instagram_integration.py). Nothing else under a
+                           campaign dir (CSV, logs, status) is served.
 
 Persistence: PROJECT_ROOT is the repo checkout (ephemeral — wiped on every
 redeploy). BRIEFS_DIR/CAMPAIGNS_DIR live under PERSIST_DIR instead, which in
@@ -28,17 +37,21 @@ PROJECT_ROOT for local dev, where redeploys aren't a concern.
 
 import asyncio
 import csv
+import hmac
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+load_dotenv()  # local dev; on Railway real env vars win (load_dotenv never overrides them)
 
 PROJECT_ROOT = Path(__file__).parent
 PERSIST_DIR = Path(os.getenv("PERSIST_DIR", str(PROJECT_ROOT)))
@@ -48,20 +61,50 @@ CAMPAIGNS_DIR = PERSIST_DIR / "campaigns"
 BRIEFS_DIR.mkdir(parents=True, exist_ok=True)
 CAMPAIGNS_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Social Media Pipeline API", version="0.1.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+app = FastAPI(
+    title="Social Media Pipeline API", version="0.1.0",
+    docs_url=None, redoc_url=None, openapi_url=None,  # don't advertise the API surface
 )
 
-# Serves every campaign's images/ dir publicly at /campaigns/<session_id>/images/<file>.
-# Agent 6 builds Instagram image URLs as IMAGE_HOST_BASE_URL + that same relative path
-# (see upload_to_image_host in agent_6_instagram_integration.py), so this mount and that
-# URL construction must stay in sync.
-app.mount("/campaigns", StaticFiles(directory=CAMPAIGNS_DIR), name="campaign-images")
+
+def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Shared-secret check. Reads the env var per request; fails closed if it's unset."""
+    expected = os.getenv("PIPELINE_API_KEY", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Server auth is not configured")
+    if not x_api_key or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+_AUTH = [Depends(require_api_key)]
+
+# Session ids become directory/file names (CAMPAIGNS_DIR / id, brief-<id>.json), so they must
+# not be able to contain "/" or start with "." — this rules out "..", absolute paths, etc.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+_IMAGE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.(png|jpe?g)$", re.IGNORECASE)
+
+
+def _check_session_id(session_id: str) -> str:
+    if not _SESSION_ID_RE.fullmatch(session_id):
+        raise HTTPException(status_code=422, detail="Invalid session id")
+    return session_id
+
+
+# Public image route: Instagram must be able to fetch each final image by URL, so this one
+# route is unauthenticated — but it serves ONLY image files from <campaign>/images/, never
+# the rest of the campaign dir. Agent 6 builds URLs as IMAGE_HOST_BASE_URL + the image's path
+# relative to PERSIST_DIR (see upload_to_image_host in agent_6_instagram_integration.py), so
+# this path shape and that URL construction must stay in sync. HEAD is allowed because some
+# fetchers probe with it (the old StaticFiles mount answered HEAD too).
+@app.api_route("/campaigns/{session_id}/images/{filename}", methods=["GET", "HEAD"])
+async def campaign_image(session_id: str, filename: str):
+    images_root = (CAMPAIGNS_DIR / _check_session_id(session_id) / "images").resolve()
+    if not _IMAGE_NAME_RE.fullmatch(filename):
+        raise HTTPException(status_code=404, detail="Not found")
+    path = (images_root / filename).resolve()
+    if images_root not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(path)
 
 
 # Kept in sync with config.settings.CSV_COLUMNS by hand — this module writes
@@ -79,14 +122,14 @@ class SessionPayload(BaseModel):
     posts: list[dict[str, Any]] | None = None
 
 
-@app.post("/sessions", status_code=201)
+@app.post("/sessions", status_code=201, dependencies=_AUTH)
 async def create_session(payload: SessionPayload, background_tasks: BackgroundTasks):
     brief = payload.brief
 
     if not brief.get("id"):
         brief["id"] = datetime.now().strftime("session-%Y%m%d-%H%M%S")
 
-    session_id = brief["id"]
+    session_id = _check_session_id(str(brief["id"]))
     brief_path = BRIEFS_DIR / f"brief-{session_id}.json"
     brief_path.write_text(json.dumps(brief, indent=2))
 
@@ -137,9 +180,9 @@ def _write_posts_csv(campaign_dir: Path, brief: dict, posts: list[dict]) -> None
         writer.writerows(rows)
 
 
-@app.get("/sessions/{session_id}")
+@app.get("/sessions/{session_id}", dependencies=_AUTH)
 async def get_session(session_id: str):
-    campaign_dir = CAMPAIGNS_DIR / session_id
+    campaign_dir = CAMPAIGNS_DIR / _check_session_id(session_id)
     if not campaign_dir.exists():
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -150,15 +193,15 @@ async def get_session(session_id: str):
     return json.loads(status_file.read_text())
 
 
-@app.get("/sessions/{session_id}/log")
+@app.get("/sessions/{session_id}/log", dependencies=_AUTH)
 async def get_log(session_id: str):
-    log_path = CAMPAIGNS_DIR / session_id / "pipeline.log"
+    log_path = CAMPAIGNS_DIR / _check_session_id(session_id) / "pipeline.log"
     if not log_path.exists():
         raise HTTPException(status_code=404, detail="No log yet")
     return {"log": log_path.read_text(errors="replace")}
 
 
-@app.post("/sessions/{session_id}/publish")
+@app.post("/sessions/{session_id}/publish", dependencies=_AUTH)
 async def publish_session(session_id: str):
     """
     Force-publish this session's queued posts (facebook_status == scheduled)
@@ -168,7 +211,7 @@ async def publish_session(session_id: str):
     synchronously since it's a small number of API calls, not a full
     pipeline pass.
     """
-    campaign_dir = CAMPAIGNS_DIR / session_id
+    campaign_dir = CAMPAIGNS_DIR / _check_session_id(session_id)
     if not campaign_dir.exists():
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -189,7 +232,7 @@ async def publish_session(session_id: str):
     return {"session_id": session_id, "output": output}
 
 
-@app.post("/admin/publish-due")
+@app.post("/admin/publish-due", dependencies=_AUTH)
 async def publish_due():
     """
     Sweep every campaign under CAMPAIGNS_DIR for posts whose
