@@ -24,6 +24,7 @@ for manual/local use or the server's POST /sessions/{id}/publish endpoint
 """
 
 import csv
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -40,6 +41,18 @@ from config.settings import (
     IMAGE_HOST_BASE_URL,
     INSTAGRAM_SCHEDULE_DAYS_AHEAD,
 )
+
+def _auth_headers():
+    """The access token goes in a header, never the URL: requests' HTTPError text includes
+    the full URL, and this agent's stdout ends up in logs that server.py returns over HTTP."""
+    return {"Authorization": f"Bearer {INSTAGRAM_ACCESS_TOKEN}"}
+
+def _redact(text):
+    """Scrub the token from anything we print — defense in depth if it ever lands in a URL/body."""
+    text = str(text)
+    if INSTAGRAM_ACCESS_TOKEN:
+        text = text.replace(INSTAGRAM_ACCESS_TOKEN, "<redacted>")
+    return re.sub(r"(access_token=)[^&\s\"']+", r"\1<redacted>", text)
 
 def read_posts_csv():
     """Read posts from CSV."""
@@ -95,24 +108,23 @@ def create_instagram_container(image_url, caption):
     params = {
         "image_url": image_url,
         "caption": caption,
-        "access_token": INSTAGRAM_ACCESS_TOKEN
     }
 
     try:
-        response = requests.post(url, params=params, timeout=30)
+        response = requests.post(url, params=params, headers=_auth_headers(), timeout=30)
         response.raise_for_status()
         data = response.json()
 
         if "id" in data:
             return data["id"]
         else:
-            print(f"  ✗ No container ID in response: {data}")
+            print(f"  ✗ No container ID in response: {_redact(data)}")
             return None
 
     except requests.exceptions.RequestException as e:
-        print(f"  ✗ Error creating container: {e}")
+        print(f"  ✗ Error creating container: {_redact(e)}")
         if hasattr(e.response, 'text'):
-            print(f"    Response: {e.response.text}")
+            print(f"    Response: {_redact(e.response.text)}")
         return None
 
 def publish_container(container_id):
@@ -124,24 +136,23 @@ def publish_container(container_id):
 
     params = {
         "creation_id": container_id,
-        "access_token": INSTAGRAM_ACCESS_TOKEN
     }
 
     try:
-        response = requests.post(url, params=params, timeout=30)
+        response = requests.post(url, params=params, headers=_auth_headers(), timeout=30)
         response.raise_for_status()
         data = response.json()
 
         if "id" in data:
             return data["id"]
         else:
-            print(f"  ✗ No media ID in response: {data}")
+            print(f"  ✗ No media ID in response: {_redact(data)}")
             return None
 
     except requests.exceptions.RequestException as e:
-        print(f"  ✗ Error publishing container: {e}")
+        print(f"  ✗ Error publishing container: {_redact(e)}")
         if hasattr(e.response, 'text'):
-            print(f"    Response: {e.response.text}")
+            print(f"    Response: {_redact(e.response.text)}")
         return None
 
 def publish_post_row(row: dict, images_dir: Path) -> bool:
